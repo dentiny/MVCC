@@ -50,7 +50,8 @@ bool Database::IsVisible(const ValueWrapper& value_wrapper, Transaction* txn) {
   // Case-3: value starts before current transaction, and has been committed or
   // didn't end (aka, not overwritten).
   if (value_wrapper.start_txn_id < txn->txn_id
-      && db_txns.at(value_wrapper.start_txn_id)->state == TransactionState::kCommitted) {
+      && db_txns.at(value_wrapper.start_txn_id)->state
+      == TransactionState::kCommitted) {
     // Case-3-1: value doesn't get overwritten.
     if (value_wrapper.end_txn_id == kInvalidTxnId) {
       return true;
@@ -58,7 +59,8 @@ bool Database::IsVisible(const ValueWrapper& value_wrapper, Transaction* txn) {
 
     // Case-3-2: value gets overwritten by an uncommited transaction.
     if (value_wrapper.end_txn_id != kInvalidTxnId
-        && db_txns.at(value_wrapper.end_txn_id)->state != TransactionState::kCommitted) {
+        && db_txns.at(value_wrapper.end_txn_id)->state
+        != TransactionState::kCommitted) {
       return true;
     }
   }

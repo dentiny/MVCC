@@ -67,7 +67,7 @@ struct ValueWrapper {
 // Forward declaration.
 class Database;
 
-// A connection has access to [Database], which represents a single [Transaction].
+// [Connection] represents a single [Transaction].
 struct Connection {
  public:
   Connection() = default;
