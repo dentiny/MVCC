@@ -1,5 +1,6 @@
 #include "mvcc.h"
 
+#include <iostream>
 #include <utility>
 
 namespace mvcc {
@@ -19,42 +20,50 @@ Connection Database::CreateConn() {
   return conn;
 }
 
+bool Database::HasWriteConflict(Transaction* txn1, Transaction* txn2) {
+  const auto& write_set1 = txn1->write_set;
+  const auto& write_set2 = txn2->write_set;
+
+  for (const auto& cur_key : write_set1) {
+    if (write_set2.find(cur_key) != write_set2.end()) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+// Two visible cases:
+// 1. The value starts before current transaction, and already committed.
+// 2. The value doesn't ends, or ends from an uncommitted transaction.
 bool Database::IsVisible(const ValueWrapper& value_wrapper, Transaction* txn) {
-  // Case-1.
-  if (value_wrapper.start_txn_id > txn->txn_id) {
-    return false;
-  }
-
-  // Case-2: if start txn is still in-progress, invisible.
-  if (txn->inprogress_txns.find(value_wrapper.start_txn_id)
-      != txn->inprogress_txns.end()) {
-    return false;
-  }
-
-  // Case-3.
-  if (db_txns.at(value_wrapper.start_txn_id)->state !=
-      TransactionState::kCommitted
-      && value_wrapper.start_txn_id != txn->txn_id) {
-    return false;
-  }
-
-  // Case-4: if current value is deleted in the current [txn].
+  // Case-1: if the value is deleted or overwritten by current transaction.
   if (value_wrapper.end_txn_id == txn->txn_id) {
     return false;
   }
 
-  // Case-5: the value is deleted in another committed transaction, which starts
-  // before the given [txn].
-  TxnId end_txn_id = value_wrapper.end_txn_id;
-  if (end_txn_id != kInvalidTxnId
-      && end_txn_id < txn->txn_id
-      && db_txns.at(end_txn_id)->state != TransactionState::kCommitted
-      && txn->inprogress_txns.find(end_txn_id)
-      == txn->inprogress_txns.end()) {
-    return false;
+  // Case-2: current transaction writes the value.
+  if (value_wrapper.start_txn_id == txn->txn_id) {
+    return true;
   }
 
-  return true;
+  // Case-3: value starts before current transaction, and has been committed or
+  // didn't end (aka, not overwritten).
+  if (value_wrapper.start_txn_id < txn->txn_id
+      && db_txns.at(value_wrapper.start_txn_id)->state == TransactionState::kCommitted) {
+    // Case-3-1: value doesn't get overwritten.
+    if (value_wrapper.end_txn_id == kInvalidTxnId) {
+      return true;
+    }
+
+    // Case-3-2: value gets overwritten by an uncommited transaction.
+    if (value_wrapper.end_txn_id != kInvalidTxnId
+        && db_txns.at(value_wrapper.end_txn_id)->state != TransactionState::kCommitted) {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 std::optional<ValueType> Connection::Get(const KeyType& key) {
@@ -93,6 +102,54 @@ void Connection::Set(KeyType key, ValueType value) {
   cur_value_wrapper.start_txn_id = txn->txn_id;
   cur_value_wrapper.end_txn_id = kInvalidTxnId;
   value_wrappers.emplace_back(std::move(cur_value_wrapper));
+}
+
+bool Connection::Delete(const KeyType& key) {
+  auto key_iter = db->storage.find(key);
+  if (key_iter == db->storage.end()) {
+    return false;
+  }
+
+  auto& value_wrappers = key_iter->second;
+  const auto value_num = value_wrappers.size();
+  for (int idx = value_num - 1; idx >= 0; --idx) {
+    // Mark all visible values as finish.
+    if (db->IsVisible(value_wrappers[idx], txn.get())) {
+      value_wrappers[idx].end_txn_id = txn->txn_id;
+    }
+  }
+
+  txn->write_set.insert(key);
+  return true;
+}
+
+void Connection::Abort() {
+  txn->state = TransactionState::kAborted;
+}
+
+bool Connection::Commit() {
+  // At commit, check whether current transaction has conflict with in-progress
+  // ones at start.
+  const auto& inprogress_txns = txn->inprogress_txns;
+  for (const TxnId cur_txn_id : inprogress_txns) {
+    const auto& another_txn = db->db_txns.at(cur_txn_id);
+    if (another_txn->state != TransactionState::kCommitted) {
+      continue;
+    }
+    if (db->HasWriteConflict(txn.get(), another_txn.get())) {
+      Abort();
+      return false;
+    }
+  }
+
+  txn->state = TransactionState::kCommitted;
+  return true;
+}
+
+Connection::~Connection() {
+  if (txn->state == TransactionState::kInProgress) {
+    Abort();
+  }
 }
 
 }  // namespace mvcc
