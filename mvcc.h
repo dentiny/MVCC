@@ -32,6 +32,7 @@ using ValueType = std::string;
 
 enum class IsolationLevel {
   kInvalid,
+  kReadCommittedIsolation,
   kRepeatableReadIsolation,
   kSnapshotIsolation,
   kSerializableIsolation,
@@ -120,6 +121,13 @@ struct Database {
  private:
   friend class Connection;
 
+  // Visibility check for read committed isolation level.
+  bool IsVisibleForReadCommitted(const ValueWrapper& value_wrapper,
+    Transaction* txn);
+  // Visibility check for repeatable read, snapshot isolation and serializable
+  // isolation.
+  bool IsVisibleForRepeatableRead(const ValueWrapper& value_wrapper,
+    Transaction* txn);
   // Returns whether the given [value_wrapper] is visible for [txn].
   bool IsVisible(const ValueWrapper& value_wrapper, Transaction* txn);
 

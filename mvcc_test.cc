@@ -5,7 +5,24 @@
 #include <cassert>
 #include <iostream>
 
-#define EXPECT_EQ(lhs, rhs) assert((lhs) == (rhs))
+namespace {
+
+template <typename T1, typename T2>
+bool CheckEqualityAndLog(const T1& lhs, const T2& rhs) {
+  if (lhs == rhs) {
+    return true;
+  }
+  std::cerr << "lhs: " << lhs << ", rhs: " << rhs << std::endl;
+  return false;
+}
+
+}  // namespace
+
+#define EXPECT_EQ(lhs, rhs)                             \
+  if (const auto& lhs_value = (lhs); true)              \
+    if (const auto& rhs_value = (rhs); true)            \
+      assert(CheckEqualityAndLog(lhs_value, rhs_value))
+
 #define EXPECT_TRUE(cond) assert((cond))
 #define EXPECT_FALSE(cond) assert(!(cond))
 
@@ -179,6 +196,49 @@ void TestMultipleTransactions_RepeatableReadIsolation() {
   AssertHasKeyValue(&db, "key", "txn-2");
 }
 
+void TestMultipleTransactions_ReadCommitted() {
+  Database db{};
+  db.SetIsolationLevel(IsolationLevel::kReadCommittedIsolation);
+
+  {
+    auto conn = db.CreateConn();
+    conn.Set("key", "val");
+    EXPECT_TRUE(conn.Commit());
+  }
+  AssertHasKeyValue(&db, "key", "val");
+
+  auto conn1 = db.CreateConn();
+  auto conn2 = db.CreateConn();
+
+  // Set key-value pair in connection-1 and check.
+  conn1.Set("key", "txn-1");
+  auto value = conn2.Get("key");
+  EXPECT_TRUE(value.has_value());
+  EXPECT_EQ(*value, "val");
+
+  // Set key-value pair in connection-2 and check.
+  conn2.Set("key", "txn-2");
+  value = conn1.Get("key");
+  EXPECT_TRUE(value.has_value());
+  EXPECT_EQ(*value, "txn-1");
+
+  // Commit transactions.
+  EXPECT_TRUE(conn1.Commit());
+  AssertHasKeyValue(&db, "key", "txn-1");
+
+  // Start a write transaction after transaction2.
+  auto conn3 = db.CreateConn();
+  conn3.Set("key", "txn-3");
+  EXPECT_TRUE(conn3.Commit());
+
+  // Check transaction2 before and after transaction3 commits.
+  value = conn2.Get("key");
+  EXPECT_TRUE(value.has_value());
+  EXPECT_EQ(*value, "txn-3");
+  EXPECT_TRUE(conn2.Commit());
+  AssertHasKeyValue(&db, "key", "txn-3");
+}
+
 }  // namespace mvcc
 
 int main(int argc, char** argv) {
@@ -186,5 +246,6 @@ int main(int argc, char** argv) {
   mvcc::TestMultipleTransactions_SnapshotIsolation();
   mvcc::TestMultipleTransactions_SerializableIsolation();
   mvcc::TestMultipleTransactions_RepeatableReadIsolation();
+  mvcc::TestMultipleTransactions_ReadCommitted();
   return 0;
 }

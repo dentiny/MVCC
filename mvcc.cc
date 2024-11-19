@@ -65,10 +65,37 @@ bool Database::HasReadWriteConflict(Transaction* txn1, Transaction* txn2) {
   return false;
 }
 
+// Two visible case:
+// 1. The value starts from self.
+// 2. The value starts from a committed transaction, even if it happens later
+// than current one.
+bool Database::IsVisibleForReadCommitted(
+    const ValueWrapper& value_wrapper, Transaction* txn) {
+  // Case-1: if the value is deleted or overwritten by current transaction.
+  if (value_wrapper.end_txn_id == txn->txn_id) {
+    return false;
+  }
+
+  // Case-2: current transaction write the value.
+  if (value_wrapper.start_txn_id == txn->txn_id) {
+    return true;
+  }
+
+  // Case-3: start transaction has been committed, whether what
+  // end transaction state is.
+  if (db_txns.at(value_wrapper.start_txn_id)->state
+      == TransactionState::kCommitted) {
+    return true;
+  }
+
+  return false;
+}
+
 // Two visible cases:
 // 1. The value starts before current transaction, and already committed.
 // 2. The value doesn't ends, or ends from an uncommitted transaction.
-bool Database::IsVisible(const ValueWrapper& value_wrapper, Transaction* txn) {
+bool Database::IsVisibleForRepeatableRead(
+    const ValueWrapper& value_wrapper, Transaction* txn) {
   // Case-1: if the value is deleted or overwritten by current transaction.
   if (value_wrapper.end_txn_id == txn->txn_id) {
     return false;
@@ -98,6 +125,13 @@ bool Database::IsVisible(const ValueWrapper& value_wrapper, Transaction* txn) {
   }
 
   return false;
+}
+
+bool Database::IsVisible(const ValueWrapper& value_wrapper, Transaction* txn) {
+  if (txn->isolation_level == IsolationLevel::kReadCommittedIsolation) {
+    return IsVisibleForReadCommitted(value_wrapper, txn);
+  }
+  return IsVisibleForRepeatableRead(value_wrapper, txn);
 }
 
 std::optional<ValueType> Connection::Get(const KeyType& key) {
@@ -163,7 +197,8 @@ void Connection::Abort() {
 
 bool Connection::Commit() {
   // For repeatable read isolation level, no need to check conflicts.
-  if (txn->isolation_level == IsolationLevel::kRepeatableReadIsolation) {
+  if (txn->isolation_level == IsolationLevel::kReadCommittedIsolation
+      || txn->isolation_level == IsolationLevel::kRepeatableReadIsolation) {
     txn->state = TransactionState::kCommitted;
     return true;
   }
