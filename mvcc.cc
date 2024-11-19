@@ -162,6 +162,12 @@ void Connection::Abort() {
 }
 
 bool Connection::Commit() {
+  // For repeatable read isolation level, no need to check conflicts.
+  if (txn->isolation_level == IsolationLevel::kRepeatableReadIsolation) {
+    txn->state = TransactionState::kCommitted;
+    return true;
+  }
+
   // At commit, check whether current transaction has conflict with in-progress
   // ones at start.
   const auto& inprogress_txns = txn->inprogress_txns;

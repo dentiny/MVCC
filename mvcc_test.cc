@@ -146,11 +146,45 @@ void TestMultipleTransactions_SerializableIsolation() {
   EXPECT_FALSE(conn4.Commit());
 }
 
+void TestMultipleTransactions_RepeatableReadIsolation() {
+  Database db{};
+  db.SetIsolationLevel(IsolationLevel::kRepeatableReadIsolation);
+
+  {
+    auto conn = db.CreateConn();
+    conn.Set("key", "val");
+    EXPECT_TRUE(conn.Commit());
+  }
+  AssertHasKeyValue(&db, "key", "val");
+
+  auto conn1 = db.CreateConn();
+  auto conn2 = db.CreateConn();
+
+  // Set key-value pair in connection-1 and check.
+  conn1.Set("key", "txn-1");
+  auto value = conn2.Get("key");
+  EXPECT_TRUE(value.has_value());
+  EXPECT_EQ(*value, "val");
+
+  // Set key-value pair in connection-2 and check.
+  conn2.Set("key", "txn-2");
+  value = conn1.Get("key");
+  EXPECT_TRUE(value.has_value());
+  EXPECT_EQ(*value, "txn-1");
+
+  // Commit transactions.
+  EXPECT_TRUE(conn1.Commit());
+  AssertHasKeyValue(&db, "key", "txn-1");
+  EXPECT_TRUE(conn2.Commit());
+  AssertHasKeyValue(&db, "key", "txn-2");
+}
+
 }  // namespace mvcc
 
 int main(int argc, char** argv) {
   mvcc::TestGetAndSetInOneTxn();
   mvcc::TestMultipleTransactions_SnapshotIsolation();
   mvcc::TestMultipleTransactions_SerializableIsolation();
+  mvcc::TestMultipleTransactions_RepeatableReadIsolation();
   return 0;
 }

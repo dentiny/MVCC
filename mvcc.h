@@ -32,6 +32,7 @@ using ValueType = std::string;
 
 enum class IsolationLevel {
   kInvalid,
+  kRepeatableReadIsolation,
   kSnapshotIsolation,
   kSerializableIsolation,
 };
