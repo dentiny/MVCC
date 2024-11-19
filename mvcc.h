@@ -30,6 +30,12 @@ constexpr TxnId kInvalidTxnId = 0;
 using KeyType = std::string;
 using ValueType = std::string;
 
+enum class IsolationLevel {
+  kInvalid,
+  kSnapshotIsolation,
+  kSerializableIsolation,
+};
+
 enum class TransactionState {
   kInvalid,
   kInProgress,
@@ -39,6 +45,9 @@ enum class TransactionState {
 
 struct Transaction {
   TxnId txn_id = kInvalidTxnId;
+
+  // Isolation level.
+  IsolationLevel isolation_level = IsolationLevel::kInvalid;
 
   // Ongoing transactions whether the current txn starts.
   std::unordered_set<TxnId> inprogress_txns;
@@ -103,6 +112,10 @@ struct Database {
   // Create a connection, which represents a transaction.
   Connection CreateConn();
 
+  void SetIsolationLevel(IsolationLevel level) {
+    isolation_level_ = level;
+  }
+
  private:
   friend class Connection;
 
@@ -112,6 +125,9 @@ struct Database {
   // Returns whether two transactions have write conflict.
   bool HasWriteConflict(Transaction* txn1, Transaction* txn2);
 
+  // Returns whether two transactions have read-write conflict.
+  bool HasReadWriteConflict(Transaction* txn1, Transaction* txn2);
+
   // Ongoing transactions.
   // TODO(hjiang): Could prune committed transactions.
   std::map<TxnId, std::shared_ptr<Transaction>> db_txns;
@@ -119,6 +135,8 @@ struct Database {
   std::unordered_map<KeyType, std::vector<ValueWrapper>> storage;
   // Next transaction id.
   TxnId next_txn_id = kInvalidTxnId + 1;
+  // Isolation level.
+  IsolationLevel isolation_level_ = IsolationLevel::kSnapshotIsolation;
 };
 
 }  // namespace mvcc

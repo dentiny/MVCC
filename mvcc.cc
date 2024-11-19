@@ -8,7 +8,15 @@ namespace mvcc {
 Connection Database::CreateConn() {
   auto txn = std::make_shared<Transaction>();
   txn->txn_id = next_txn_id++;
+  txn->isolation_level = isolation_level_;
   txn->state = TransactionState::kInProgress;
+
+  // Get all in-process transactions.
+  for (const auto& [cur_txn_id, cur_txn] : db_txns) {
+    if (cur_txn->state == TransactionState::kInProgress) {
+      txn->inprogress_txns.insert(cur_txn_id);
+    }
+  }
 
   // Add current transaction into database.
   db_txns.emplace(txn->txn_id, txn);
@@ -25,6 +33,30 @@ bool Database::HasWriteConflict(Transaction* txn1, Transaction* txn2) {
   const auto& write_set2 = txn2->write_set;
 
   for (const auto& cur_key : write_set1) {
+    if (write_set2.find(cur_key) != write_set2.end()) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+bool Database::HasReadWriteConflict(Transaction* txn1, Transaction* txn2) {
+  // Check read set for [txn1] and write set for [txn2].
+  const auto& write_set1 = txn1->write_set;
+  const auto& read_set2 = txn2->read_set;
+
+  for (const auto& cur_key : write_set1) {
+    if (read_set2.find(cur_key) != read_set2.end()) {
+      return true;
+    }
+  }
+
+  // Check read set for [txn2] and write set for [txn1].
+  const auto& read_set1 = txn1->read_set;
+  const auto& write_set2 = txn2->write_set;
+
+  for (const auto& cur_key : read_set1) {
     if (write_set2.find(cur_key) != write_set2.end()) {
       return true;
     }
@@ -135,12 +167,28 @@ bool Connection::Commit() {
   const auto& inprogress_txns = txn->inprogress_txns;
   for (const TxnId cur_txn_id : inprogress_txns) {
     const auto& another_txn = db->db_txns.at(cur_txn_id);
-    if (another_txn->state != TransactionState::kCommitted) {
+    // Check conflict for snapshot isolation.
+    if (txn->isolation_level == IsolationLevel::kSnapshotIsolation) {
+      if (another_txn->state != TransactionState::kCommitted) {
+        continue;
+      }
+      if (db->HasWriteConflict(txn.get(), another_txn.get())) {
+        Abort();
+        return false;
+      }
       continue;
     }
-    if (db->HasWriteConflict(txn.get(), another_txn.get())) {
-      Abort();
-      return false;
+
+    // Check conflict for serializable isolation.
+    if (txn->isolation_level == IsolationLevel::kSerializableIsolation) {
+      if (db->HasWriteConflict(txn.get(), another_txn.get())) {
+        Abort();
+        return false;
+      }
+      if (db->HasReadWriteConflict(txn.get(), another_txn.get())) {
+        return false;
+      }
+      continue;
     }
   }
 

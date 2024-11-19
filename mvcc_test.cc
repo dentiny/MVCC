@@ -27,6 +27,7 @@ void AssertHasKeyValue(Database* db, const KeyType& key,
 // transaction.
 void TestGetAndSetInOneTxn() {
   Database db{};
+  db.SetIsolationLevel(IsolationLevel::kSnapshotIsolation);
 
   // First transaction.
   {
@@ -62,8 +63,9 @@ void TestGetAndSetInOneTxn() {
 }
 
 // Testing senario: testing multiple interleaving transactions.
-void TestMultipleTransactions() {
+void TestMultipleTransactions_SnapshotIsolation() {
   Database db{};
+  db.SetIsolationLevel(IsolationLevel::kSnapshotIsolation);
 
   {
     auto conn = db.CreateConn();
@@ -101,16 +103,54 @@ void TestMultipleTransactions() {
   EXPECT_TRUE(value.has_value());
   EXPECT_EQ(*value, "conn-1");
 
-  // Commit conn2 and check.
+  // Fails to commit conn2.
+  EXPECT_FALSE(conn2.Commit());
+}
+
+// Testing senario: testing multiple interleaving transactions.
+void TestMultipleTransactions_SerializableIsolation() {
+  Database db{};
+  db.SetIsolationLevel(IsolationLevel::kSerializableIsolation);
+
+  {
+    auto conn = db.CreateConn();
+    conn.Set("key", "val");
+    EXPECT_TRUE(conn.Commit());
+  }
+  AssertHasKeyValue(&db, "key", "val");
+
+  // Check both read transactions.
+  auto conn1 = db.CreateConn();
+  auto conn2 = db.CreateConn();
+
+  // Check conn1 and conn2.
+  auto value = conn1.Get("key");
+  EXPECT_TRUE(value.has_value());
+  EXPECT_EQ(*value, "val");
+  value = conn2.Get("key");
+  EXPECT_TRUE(value.has_value());
+  EXPECT_EQ(*value, "val");
+  EXPECT_TRUE(conn1.Commit());
   EXPECT_TRUE(conn2.Commit());
+
+  // Check conn1 and conn2 with read-write conflict.
+  auto conn3 = db.CreateConn();
+  auto conn4 = db.CreateConn();
+  // Read operation for conn3.
   value = conn3.Get("key");
-  EXPECT_FALSE(value.has_value());
+  EXPECT_TRUE(value.has_value());
+  EXPECT_EQ(*value, "val");
+  // Write operation for conn4.
+  conn4.Set("key", "another-val");
+  EXPECT_TRUE(conn3.Commit());
+  EXPECT_FALSE(conn4.Commit());
 }
 
 }  // namespace mvcc
 
 int main(int argc, char** argv) {
   mvcc::TestGetAndSetInOneTxn();
-  mvcc::TestMultipleTransactions();
+  mvcc::TestMultipleTransactions_SnapshotIsolation();
+  mvcc::TestMultipleTransactions_SerializableIsolation();
   return 0;
 }
